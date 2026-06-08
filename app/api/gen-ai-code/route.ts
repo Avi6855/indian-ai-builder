@@ -184,7 +184,7 @@ export async function POST(request: NextRequest) {
         const aiMessages = buildMessages(messages, fileData);
 
         const openAiStream = await openai.chat.completions.create({
-          model: process.env.AI_MODEL || "z-ai/glm-4.5-air:free",
+          model: process.env.AI_MODEL || "google/gemma-4-31b-it:free",
           messages: [
             { role: "system", content: SYSTEM_PROMPT },
             // @ts-ignore
@@ -192,6 +192,7 @@ export async function POST(request: NextRequest) {
           ],
           temperature: 0.7,
           response_format: { type: "json_object" },
+          max_tokens: 8000,
           stream: true,
         });
 
@@ -233,8 +234,13 @@ export async function POST(request: NextRequest) {
         };
 
         try {
-          parsed = JSON.parse(accumulated);
-        } catch {
+          let cleaned = accumulated.trim();
+          if (cleaned.startsWith("```json")) cleaned = cleaned.replace(/^```json\n?/, "");
+          if (cleaned.startsWith("```")) cleaned = cleaned.replace(/^```\n?/, "");
+          if (cleaned.endsWith("```")) cleaned = cleaned.replace(/```$/, "");
+          parsed = JSON.parse(cleaned.trim());
+        } catch (e) {
+          console.error("Failed to parse JSON. Accumulated string was:", accumulated);
           enqueue(
             sseEvent("error", {
               message: "AI returned invalid JSON. Please try again.",

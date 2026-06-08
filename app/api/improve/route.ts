@@ -118,7 +118,7 @@ export async function POST(request: NextRequest) {
 
       const agent = new Agent({
         providerId: "openai",
-        modelId: process.env.AI_MODEL || "z-ai/glm-4.5-air:free",
+        modelId: process.env.AI_MODEL || "google/gemma-4-31b-it:free",
         apiKey: process.env.OPENROUTER_API_KEY!,
         maxIterations: 8,
         systemPrompt: `You are an expert React developer improving a live browser preview app.

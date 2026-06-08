@@ -13,7 +13,7 @@ export const FEATURES = [
   {
     icon: Zap,
     label: "Instant generation",
-    desc: "Describe your app in plain English. GLM-4.5-AIR returns production-ready React + Tailwind code in seconds.",
+    desc: "Describe your app in plain English. Gemma-4-31B-IT returns production-ready React + Tailwind code in seconds.",
   },
   {
     icon: Eye,
