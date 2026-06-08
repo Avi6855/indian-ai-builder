@@ -9,7 +9,7 @@
 [![Next.js](https://img.shields.io/badge/Next.js-14-black?logo=next.js&logoColor=white)](https://nextjs.org/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-3.x-38B2AC?logo=tailwind-css&logoColor=white)](https://tailwindcss.com/)
 
-**India's own AI Builder. Describe your app in plain English. GLM-4.5-AIR returns production-ready React + Tailwind code in seconds.**
+**India's own AI Builder. Describe your app in plain English. Gemma-4-31B-IT returns production-ready React + Tailwind code in seconds.**
 
 [Live Demo](#demo) · [Features](#key-features) · [Architecture](#system-architecture) · [Installation](#installation)
 
@@ -123,7 +123,7 @@ This platform acts as your personal AI software engineer:
 | Technology | Purpose |
 |---|---|
 | OpenRouter API | LLM gateway routing |
-| GLM-4.5-AIR | Core LLM model for code generation |
+| Gemma-4-31B-IT | Core LLM model for code generation |
 | AI SDK (Vercel) | Streaming text and object generation |
 
 ---

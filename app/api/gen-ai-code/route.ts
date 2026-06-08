@@ -192,7 +192,6 @@ export async function POST(request: NextRequest) {
           ],
           temperature: 0.7,
           response_format: { type: "json_object" },
-          max_tokens: 8000,
           stream: true,
         });
 
@@ -234,13 +233,8 @@ export async function POST(request: NextRequest) {
         };
 
         try {
-          let cleaned = accumulated.trim();
-          if (cleaned.startsWith("```json")) cleaned = cleaned.replace(/^```json\n?/, "");
-          if (cleaned.startsWith("```")) cleaned = cleaned.replace(/^```\n?/, "");
-          if (cleaned.endsWith("```")) cleaned = cleaned.replace(/```$/, "");
-          parsed = JSON.parse(cleaned.trim());
-        } catch (e) {
-          console.error("Failed to parse JSON. Accumulated string was:", accumulated);
+          parsed = JSON.parse(accumulated);
+        } catch {
           enqueue(
             sseEvent("error", {
               message: "AI returned invalid JSON. Please try again.",
