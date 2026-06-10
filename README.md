@@ -169,7 +169,10 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_key
 
 # OpenRouter
+OPENAI_BASE_URL=https://openrouter.ai/api/v1
 OPENROUTER_API_KEY=your_openrouter_api_key
+AI_MODEL=z-ai/glm-4.5-air:free
+AI_MODEL_FALLBACKS=z-ai/glm-4.5-air:free
 ```
 
 > ⚠️ **Never commit `.env.local` or any file containing real API keys.**

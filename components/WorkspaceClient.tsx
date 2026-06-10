@@ -125,6 +125,11 @@ export function WorkspaceClient({
       // Create a fresh AbortController for this request
       const abortController = new AbortController();
       generateAbortRef.current = abortController;
+      let timedOut = false;
+      const timeoutId = window.setTimeout(() => {
+        timedOut = true;
+        abortController.abort();
+      }, 180_000);
 
       try {
         const conversationHistory = [...currentMessages, userMessage];
@@ -195,7 +200,8 @@ export function WorkspaceClient({
       } catch (err) {
         // User-initiated stop — silently roll back the user message
         if (err instanceof Error && err.name === "AbortError") {
-          setMessages((prev) => prev.slice(0, -1));
+          if (!timedOut) setMessages((prev) => prev.slice(0, -1));
+          else toast.error("Generation timed out. Please try again.");
           return;
         }
         console.error(err);
@@ -204,6 +210,7 @@ export function WorkspaceClient({
         );
         setMessages((prev) => prev.slice(0, -1));
       } finally {
+        window.clearTimeout(timeoutId);
         generateAbortRef.current = null;
         setIsGenerating(false);
         setStatusLog([]);

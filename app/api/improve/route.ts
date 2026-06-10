@@ -6,6 +6,63 @@ import { db } from "@/lib/prisma";
 import { CREDIT_COST_PER_GENERATION } from "@/lib/constants";
 import type { FileData } from "@/types/workspace";
 
+const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+const DEFAULT_MODEL_ID = "openai/gpt-oss-20b:free";
+
+function normalizeEnvValue(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  return value.trim().replace(/^['"`]+|['"`]+$/g, "");
+}
+
+function parseCsv(value: string | undefined): string[] {
+  const v = normalizeEnvValue(value);
+  if (!v) return [];
+  return v
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function unique<T>(items: T[]): T[] {
+  return [...new Set(items)];
+}
+
+function getModelCandidates(): string[] {
+  const primary = normalizeEnvValue(process.env.AI_MODEL);
+  const fallbacks = parseCsv(process.env.AI_MODEL_FALLBACKS);
+  return unique([primary, ...fallbacks, DEFAULT_MODEL_ID].filter(Boolean)) as string[];
+}
+
+function isRetryableStatus(status: number | undefined): boolean {
+  return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+}
+
+function isSwitchModelStatus(status: number | undefined): boolean {
+  return status === 400 || status === 401 || status === 402 || status === 403 || status === 404;
+}
+
+function isRetryableAgentError(err: unknown): boolean {
+  const e = err as { status?: number; message?: string };
+  if (isRetryableStatus(e?.status)) return true;
+  const msg = (e?.message ?? "").toLowerCase();
+  return msg.includes("429") || msg.includes("rate limit") || msg.includes("rate-limit");
+}
+
+function isSwitchModelAgentError(err: unknown): boolean {
+  const e = err as { status?: number; message?: string };
+  if (isSwitchModelStatus(e?.status)) return true;
+  const msg = (e?.message ?? "").toLowerCase();
+  return (
+    msg.includes("unavailable for free") ||
+    msg.includes("not available") ||
+    msg.includes("not found")
+  );
+}
+
+async function delay(ms: number) {
+  await new Promise((r) => setTimeout(r, ms));
+}
+
 // ─── SSE helper ───────────────────────────────────────────────────────────────
 
 function sseEvent(type: string, payload: object): string {
@@ -18,6 +75,13 @@ export async function POST(request: NextRequest) {
   const { userId: clerkId } = await auth();
   if (!clerkId)
     return Response.json({ message: "Unauthorized" }, { status: 401 });
+
+  if (!process.env.OPENROUTER_API_KEY) {
+    return Response.json(
+      { message: "Missing OPENROUTER_API_KEY in environment." },
+      { status: 500 }
+    );
+  }
 
   const body = await request.json();
   const { userId, workspaceId, userRequest, fileData } = body as {
@@ -54,9 +118,8 @@ export async function POST(request: NextRequest) {
         controller.enqueue(encoder.encode(chunk));
 
       // Accumulate file patches as the agent calls update_file
-      const patchedFiles: Record<string, { code: string }> = {
-        ...fileData.files,
-      };
+      const baseFiles: Record<string, { code: string }> = { ...fileData.files };
+      let patchedFiles: Record<string, { code: string }> = { ...baseFiles };
       let finalSummary = "";
 
       // ── Tool 1: update_file ──────────────────────────────────────────────
@@ -116,12 +179,27 @@ export async function POST(request: NextRequest) {
         .map(([path, { code }]) => `// ${path}\n${code}`)
         .join("\n\n---\n\n");
 
-      const agent = new Agent({
-        providerId: "openai",
-        modelId: process.env.AI_MODEL || "google/gemma-4-31b-it:free",
-        apiKey: process.env.OPENROUTER_API_KEY!,
-        maxIterations: 8,
-        systemPrompt: `You are an expert React developer improving a live browser preview app.
+      const baseUrl =
+        normalizeEnvValue(process.env.OPENROUTER_BASE_URL) ||
+        normalizeEnvValue(process.env.OPENAI_BASE_URL) ||
+        DEFAULT_OPENROUTER_BASE_URL;
+      const models = getModelCandidates();
+      let runError: unknown;
+      let result: Awaited<ReturnType<Agent["run"]>> | null = null;
+
+      for (const modelId of models) {
+        enqueue(sseEvent("status", { message: `Using ${modelId}…` }));
+        result = null;
+        patchedFiles = { ...baseFiles };
+        finalSummary = "";
+
+        const agent = new Agent({
+          providerId: "openai",
+          modelId,
+          apiKey: process.env.OPENROUTER_API_KEY!,
+          baseUrl,
+          maxIterations: 8,
+          systemPrompt: `You are an expert React developer improving a live browser preview app.
 
 The app uses React (functional components), Tailwind CSS for styling, and runs in Sandpack.
 You CANNOT use TypeScript, CSS modules, or real npm install — only what's already available.
@@ -142,13 +220,12 @@ RULES:
 - Keep all existing functionality unless asked to remove it.
 - The entry point is always /App.js with a default export.
 - All imports must reference files you've updated or packages in the available list above.`,
-        tools: [updateFileTool, doneImprovingTool],
-        // Auto-approve both tools — no human-in-the-loop needed in this context
-        toolPolicies: {
-          update_file: { autoApprove: true },
-          done_improving: { autoApprove: true },
-        },
-      });
+          tools: [updateFileTool, doneImprovingTool],
+          toolPolicies: {
+            update_file: { autoApprove: true },
+            done_improving: { autoApprove: true },
+          },
+        });
 
       try {
         // ── Stream agent reasoning to chat panel ─────────────────────────
@@ -181,10 +258,28 @@ RULES:
         // ── Run the agent ─────────────────────────────────────────────────
         enqueue(sseEvent("status", { message: "Cline agent starting…" }));
 
-        const result = await agent.run(userRequest);
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            result = await agent.run(userRequest);
+            if (result.status === "failed") {
+              throw new Error(result.error?.message ?? "Agent run failed");
+            }
+            break;
+          } catch (err) {
+            runError = err;
+            if (!isRetryableAgentError(err) || attempt === 1) throw err;
+            const waitMs = 1200 * Math.pow(2, attempt);
+            enqueue(
+              sseEvent("status", {
+                message: `Rate limited, retrying in ${Math.round(waitMs / 1000)}s…`,
+              })
+            );
+            await delay(waitMs);
+          }
+        }
 
-        if (result.status === "failed") {
-          throw new Error(result.error?.message ?? "Agent run failed");
+        if (!result || result.status === "failed") {
+          throw runError ?? new Error("Agent run failed");
         }
 
         // ── Deduct credit + save to DB ────────────────────────────────────
@@ -221,17 +316,37 @@ RULES:
               updatedUser?.credits ?? user.credits - CREDIT_COST_PER_GENERATION,
           })
         );
+        controller.close();
+        return;
       } catch (err) {
-        console.error("[improve] error:", err);
+        runError = err;
+        const e = err as { status?: number; message?: string };
+        console.error("[improve] error", {
+          status: e?.status,
+          message: e?.message ?? "Unknown error",
+        });
+        if (isSwitchModelAgentError(err) || isRetryableAgentError(err)) {
+          enqueue(sseEvent("status", { message: "Switching model…" }));
+          continue;
+        }
         enqueue(
           sseEvent("error", {
             message:
               err instanceof Error ? err.message : "Something went wrong.",
           })
         );
-      } finally {
         controller.close();
+        return;
       }
+      }
+
+      enqueue(
+        sseEvent("error", {
+          message:
+            "AI provider is rate-limiting requests. Please retry, or set AI_MODEL / AI_MODEL_FALLBACKS to a different OpenRouter model.",
+        })
+      );
+      controller.close();
     },
   });
 

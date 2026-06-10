@@ -23,6 +23,13 @@
 # misc
 .DS_Store
 *.pem
+.env
+.env.*
+.env.local
+!.env.example
+
+/.agents/skills/supabase-postgres-best-practices/
+/.agents/skills/supabase/
 
 # debug
 npm-debug.log*
