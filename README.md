@@ -9,7 +9,7 @@
 [![Next.js](https://img.shields.io/badge/Next.js-14-black?logo=next.js&logoColor=white)](https://nextjs.org/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-3.x-38B2AC?logo=tailwind-css&logoColor=white)](https://tailwindcss.com/)
 
-**India's own AI Builder. Describe your app in plain English. Gemma-4-31B-IT returns production-ready React + Tailwind code in seconds.**
+**India's own AI Builder. Describe your app in plain English. INDIAN AI BUILDER returns production-ready React + Tailwind code in seconds.**
 
 [Live Demo](#demo) · [Features](#key-features) · [Architecture](#system-architecture) · [Installation](#installation)
 
