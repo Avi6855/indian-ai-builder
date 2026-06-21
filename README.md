@@ -140,7 +140,7 @@ Ensure the following are installed on your machine:
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/your-username/indian-ai-builder.git
+git clone https://github.com/Avi6855/indian-ai-builder.git
 cd indian-ai-builder
 ```
 
