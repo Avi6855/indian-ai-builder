@@ -5,32 +5,11 @@ import { db } from "@/lib/prisma";
 import { CREDIT_COST_PER_GENERATION } from "@/lib/constants";
 import type { Message, FileData } from "@/types/workspace";
 import { aj } from "@/lib/arcjet";
-
-const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-const DEFAULT_MODEL_ID = "openai/gpt-oss-20b:free";
+import { getAiApiKey, getAiBaseUrl, getAiModelCandidates } from "@/lib/ai-config";
 
 function normalizeEnvValue(value: string | undefined): string | undefined {
   if (!value) return undefined;
   return value.trim().replace(/^['"`]+|['"`]+$/g, "");
-}
-
-function parseCsv(value: string | undefined): string[] {
-  const v = normalizeEnvValue(value);
-  if (!v) return [];
-  return v
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-function unique<T>(items: T[]): T[] {
-  return [...new Set(items)];
-}
-
-function getModelCandidates(): string[] {
-  const primary = normalizeEnvValue(process.env.AI_MODEL);
-  const fallbacks = parseCsv(process.env.AI_MODEL_FALLBACKS);
-  return unique([primary, ...fallbacks, DEFAULT_MODEL_ID].filter(Boolean)) as string[];
 }
 
 function isRetryableStatus(status: number | undefined): boolean {
@@ -46,15 +25,9 @@ async function delay(ms: number) {
 }
 
 function getOpenAIClient() {
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) throw new Error("Missing OPENROUTER_API_KEY.");
-
   return new OpenAI({
-    baseURL:
-      normalizeEnvValue(process.env.OPENROUTER_BASE_URL) ||
-      normalizeEnvValue(process.env.OPENAI_BASE_URL) ||
-      DEFAULT_OPENROUTER_BASE_URL,
-    apiKey,
+    baseURL: getAiBaseUrl(),
+    apiKey: getAiApiKey(),
   });
 }
 
@@ -62,6 +35,38 @@ function getOpenAIClient() {
 
 function sseEvent(type: string, payload: unknown): string {
   return `data: ${JSON.stringify({ type, ...(payload as object) })}\n\n`;
+}
+
+// ─── Parse the complete JSON generation response ─────────────────────────────
+
+type ParsedGeneration = {
+  assistantMessage: string;
+  title?: string;
+  files: Record<string, { code: string }>;
+  dependencies: Record<string, string>;
+};
+
+function parseAiJsonGeneration(text: string): ParsedGeneration | null {
+  if (!text.trim()) return null;
+
+  const tryParse = (value: string): ParsedGeneration | null => {
+    try {
+      return JSON.parse(value) as ParsedGeneration;
+    } catch {
+      return null;
+    }
+  };
+
+  const direct = tryParse(text);
+  if (direct) return direct;
+
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start !== -1 && end !== -1 && end > start) {
+    return tryParse(text.slice(start, end + 1));
+  }
+
+  return null;
 }
 
 // ─── Extract short label from a Gemini thought chunk ─────────────────────────
@@ -133,7 +138,8 @@ RULES:
 7. Do not include react, react-dom, or tailwindcss in "dependencies" — they are always available.
 8. When modifying existing code, include ALL files (both changed and unchanged) in "files".
 9. Keep code clean, readable, and production-quality.
-10. If the user attaches an image, use it as a design reference and match the layout/style as closely as possible.`;
+10. If the user attaches an image, use it as a design reference and match the layout/style as closely as possible.
+11. Keep the generated code compact — prefer a single /App.js file when possible, skip comments, and use the smallest working implementation of every feature.`;
 
 // ─── OpenAI messages builder ──────────────────────────────────────────────────
 
@@ -195,13 +201,17 @@ export async function POST(request: NextRequest) {
 
   const lastUserMessage =
     [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
-  const decision = await aj.protect(arcjetReq, {
-    requested: 1,
-    userId: clerkId,
-    detectPromptInjectionMessage: lastUserMessage,
-  });
+  // Local dev/testing escape hatch — never set ARCJET_DISABLED in production
+  const decision =
+    process.env.ARCJET_DISABLED === "1"
+      ? null
+      : await aj.protect(arcjetReq, {
+          requested: 1,
+          userId: clerkId,
+          detectPromptInjectionMessage: lastUserMessage,
+        });
 
-  if (decision.isDenied()) {
+  if (decision?.isDenied()) {
     return Response.json(
       { message: decision.reason?.type ?? "Request blocked" },
       { status: 429 }
@@ -243,9 +253,9 @@ export async function POST(request: NextRequest) {
       };
 
       const totalTimeoutMs =
-        Number(normalizeEnvValue(process.env.AI_MAX_SECONDS) ?? "180") * 1000;
+        Number(normalizeEnvValue(process.env.AI_MAX_SECONDS) ?? "280") * 1000;
       const idleTimeoutMs =
-        Number(normalizeEnvValue(process.env.AI_MAX_IDLE_SECONDS) ?? "25") * 1000;
+        Number(normalizeEnvValue(process.env.AI_MAX_IDLE_SECONDS) ?? "60") * 1000;
       const startedAt = Date.now();
 
       const heartbeat = setInterval(() => {
@@ -256,17 +266,20 @@ export async function POST(request: NextRequest) {
         const aiMessages = buildMessages(messages, fileData);
         const openai = getOpenAIClient();
 
-        const models = getModelCandidates();
-        let openAiStream: AsyncIterable<unknown> | null = null;
+        const models = getAiModelCandidates();
         let streamAbort: AbortController | null = null;
         let lastError: unknown;
-        let usedModel: string | null = null;
+        let accumulated = "";
+        let parsed: ParsedGeneration | null = null;
+        let lastEmitTime = 0; // throttle thought emissions
 
-        for (const model of models) {
+        modelLoop: for (const model of models) {
           enqueue(sseEvent("status", { message: `Using ${model}…` }));
 
           const modes = [true, false] as const;
           for (const useResponseFormat of modes) {
+            let openAiStream: AsyncIterable<unknown> | null = null;
+
             for (let attempt = 0; attempt < 3; attempt++) {
               try {
                 streamAbort?.abort();
@@ -291,7 +304,6 @@ export async function POST(request: NextRequest) {
                     timeout: totalTimeoutMs,
                   }
                 );
-                usedModel = model;
                 break;
               } catch (err) {
                 lastError = err;
@@ -309,97 +321,81 @@ export async function POST(request: NextRequest) {
               }
             }
 
-            if (openAiStream) break;
+            if (!openAiStream) break;
+
+            accumulated = "";
+            let streamCompleted = true;
+
+            try {
+              const iter = (openAiStream as any)[Symbol.asyncIterator]();
+              while (true) {
+                if (Date.now() - startedAt > totalTimeoutMs) {
+                  streamAbort?.abort();
+                  throw new Error("AI generation timed out.");
+                }
+
+                const next = iter.next();
+                const res = await Promise.race([
+                  next,
+                  delay(idleTimeoutMs).then(() => ({ timeout: true as const })),
+                ]);
+
+                if ("timeout" in res) {
+                  streamAbort?.abort();
+                  throw new Error("AI stream stalled (no tokens received).");
+                }
+
+                if (res.done) break;
+
+                const delta = res.value?.choices?.[0]?.delta;
+                if (!delta) continue;
+
+                // Some providers send reasoning in 'reasoning_content'
+                // @ts-ignore
+                const reasoning = delta.reasoning_content;
+                if (reasoning) {
+                  const now = Date.now();
+                  if (now - lastEmitTime > 600) {
+                    const label = extractThoughtLabel(reasoning);
+                    if (label) {
+                      enqueue(sseEvent("status", { message: label }));
+                      lastEmitTime = now;
+                    }
+                  }
+                }
+
+                if (delta.content) {
+                  accumulated += delta.content;
+                }
+              }
+            } catch (err) {
+              lastError = err;
+              streamCompleted = false;
+              accumulated = "";
+            }
+
+            if (streamCompleted) {
+              parsed = parseAiJsonGeneration(accumulated);
+              if (parsed) break modelLoop;
+            }
+
+            if (Date.now() - startedAt > totalTimeoutMs) break modelLoop;
           }
 
-          if (openAiStream) break;
           enqueue(sseEvent("status", { message: `Switching model…` }));
         }
 
-        if (!openAiStream) {
-          throw lastError ?? new Error("Unable to start AI generation.");
-        }
-
-        let accumulated = ""; // final JSON output
-        let lastEmitTime = 0; // throttle thought emissions
-
-        const iter = (openAiStream as any)[Symbol.asyncIterator]();
-        while (true) {
-          if (Date.now() - startedAt > totalTimeoutMs) {
-            streamAbort?.abort();
-            throw new Error("AI generation timed out.");
-          }
-
-          const next = iter.next();
-          const res = await Promise.race([
-            next,
-            delay(idleTimeoutMs).then(() => ({ timeout: true as const })),
-          ]);
-
-          if ("timeout" in res) {
-            streamAbort?.abort();
-            throw new Error("AI stream stalled (no tokens received).");
-          }
-
-          if (res.done) break;
-
-          const delta = res.value?.choices?.[0]?.delta;
-          if (!delta) continue;
-
-          // Some OpenRouter models send reasoning in 'reasoning_content'
-          // @ts-ignore
-          const reasoning = delta.reasoning_content;
-          if (reasoning) {
-            const now = Date.now();
-            if (now - lastEmitTime > 600) {
-              const label = extractThoughtLabel(reasoning);
-              if (label) {
-                enqueue(sseEvent("status", { message: label }));
-                lastEmitTime = now;
-              }
-            }
-          }
-
-          if (delta.content) {
-             // For models that embed reasoning inside <think> tags in the regular content
-             // we could try to extract it, but for simplicity we'll just pass content along
-             accumulated += delta.content;
-          }
-        }
-
-        // ── Parse the complete JSON response ──────────────────────────────────
-
-        let parsed: {
-          assistantMessage: string;
-          title?: string;
-          files: Record<string, { code: string }>;
-          dependencies: Record<string, string>;
-        };
-
-        try {
-          parsed = JSON.parse(accumulated);
-        } catch {
-          const start = accumulated.indexOf("{");
-          const end = accumulated.lastIndexOf("}");
-          if (start !== -1 && end !== -1 && end > start) {
-            try {
-              parsed = JSON.parse(accumulated.slice(start, end + 1));
-            } catch {
-              enqueue(
-                sseEvent("error", {
-                  message: "AI returned invalid JSON. Please try again.",
-                })
-              );
-              return;
-            }
-          } else {
-            enqueue(
-              sseEvent("error", {
-                message: "AI returned invalid JSON. Please try again.",
-              })
-            );
-            return;
-          }
+        if (!parsed) {
+          const lastMessage = lastError instanceof Error ? lastError.message : "";
+          enqueue(
+            sseEvent("error", {
+              message:
+                lastMessage === "AI generation timed out."
+                  ? "AI generation timed out. Try a smaller prompt or switch to a different model."
+                  : "The AI models did not respond in time. Please retry.",
+            })
+          );
+          return;
         }
 
         const {
@@ -490,10 +486,10 @@ export async function POST(request: NextRequest) {
           sseEvent("error", {
             message:
               status === 429
-                ? "The AI provider is rate-limiting requests right now. Please retry, or set AI_MODEL to another OpenRouter model (or set AI_MODEL_FALLBACKS)."
+                ? "The AI provider is rate-limiting requests right now. Please retry in a moment."
                 : status === 404 || status === 402 || status === 403
                 ? providerRaw ||
-                  "Selected model is not available. Please change AI_MODEL or set AI_MODEL_FALLBACKS."
+                  "Selected model is not available. Please change NARA_MODELS."
                 : e?.message === "AI generation timed out."
                 ? "AI generation timed out. Try a smaller prompt or switch to a faster model."
                 : e?.message === "AI stream stalled (no tokens received)."

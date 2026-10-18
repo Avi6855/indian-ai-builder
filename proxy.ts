@@ -24,9 +24,12 @@ const aj = arcjet({
 });
 
 export default clerkMiddleware(async (auth, req) => {
-  const decision = await aj.protect(req);
-  if (decision.isDenied()) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  // Local dev/testing escape hatch — never set ARCJET_DISABLED in production
+  if (process.env.ARCJET_DISABLED !== "1") {
+    const decision = await aj.protect(req);
+    if (decision.isDenied()) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
   }
 
   // Clerk auth guard — redirect unauthenticated users away from /workspace

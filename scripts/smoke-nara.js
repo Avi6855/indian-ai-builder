@@ -5,19 +5,18 @@ const OpenAIModule = require("openai");
 const OpenAI = OpenAIModule.default ?? OpenAIModule;
 
 async function main() {
-  const baseUrl = (process.env.OPENROUTER_BASE_URL ||
-    process.env.OPENAI_BASE_URL ||
-    "https://openrouter.ai/api/v1"
+  const baseUrl = (process.env.NARA_BASE_URL ||
+    "https://router.bynara.id/v1"
   ).trim();
 
-  const apiKey = process.env.OPENROUTER_API_KEY;
+  const apiKey = process.env.NARA_API_KEY;
   if (!apiKey) {
-    throw new Error("Missing OPENROUTER_API_KEY in .env.local");
+    throw new Error("Missing NARA_API_KEY in .env.local");
   }
 
-  const model = (process.env.AI_MODEL || "").trim();
+  const model = (process.env.NARA_MODELS || "").trim().split(",")[0].trim();
   if (!model) {
-    throw new Error("Missing AI_MODEL in .env.local");
+    throw new Error("Missing NARA_MODELS in .env.local");
   }
 
   const modelsRes = await fetch(`${baseUrl}/models`, {

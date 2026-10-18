@@ -4,34 +4,8 @@ import { Agent, createTool } from "@cline/sdk";
 import { z } from "zod";
 import { db } from "@/lib/prisma";
 import { CREDIT_COST_PER_GENERATION } from "@/lib/constants";
+import { getAiApiKey, getAiBaseUrl, getAiModelCandidates } from "@/lib/ai-config";
 import type { FileData } from "@/types/workspace";
-
-const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-const DEFAULT_MODEL_ID = "openai/gpt-oss-20b:free";
-
-function normalizeEnvValue(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  return value.trim().replace(/^['"`]+|['"`]+$/g, "");
-}
-
-function parseCsv(value: string | undefined): string[] {
-  const v = normalizeEnvValue(value);
-  if (!v) return [];
-  return v
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-function unique<T>(items: T[]): T[] {
-  return [...new Set(items)];
-}
-
-function getModelCandidates(): string[] {
-  const primary = normalizeEnvValue(process.env.AI_MODEL);
-  const fallbacks = parseCsv(process.env.AI_MODEL_FALLBACKS);
-  return unique([primary, ...fallbacks, DEFAULT_MODEL_ID].filter(Boolean)) as string[];
-}
 
 function isRetryableStatus(status: number | undefined): boolean {
   return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
@@ -75,13 +49,6 @@ export async function POST(request: NextRequest) {
   const { userId: clerkId } = await auth();
   if (!clerkId)
     return Response.json({ message: "Unauthorized" }, { status: 401 });
-
-  if (!process.env.OPENROUTER_API_KEY) {
-    return Response.json(
-      { message: "Missing OPENROUTER_API_KEY in environment." },
-      { status: 500 }
-    );
-  }
 
   const body = await request.json();
   const { userId, workspaceId, userRequest, fileData } = body as {
@@ -179,11 +146,8 @@ export async function POST(request: NextRequest) {
         .map(([path, { code }]) => `// ${path}\n${code}`)
         .join("\n\n---\n\n");
 
-      const baseUrl =
-        normalizeEnvValue(process.env.OPENROUTER_BASE_URL) ||
-        normalizeEnvValue(process.env.OPENAI_BASE_URL) ||
-        DEFAULT_OPENROUTER_BASE_URL;
-      const models = getModelCandidates();
+      const baseUrl = getAiBaseUrl();
+      const models = getAiModelCandidates();
       let runError: unknown;
       let result: Awaited<ReturnType<Agent["run"]>> | null = null;
 
@@ -196,7 +160,7 @@ export async function POST(request: NextRequest) {
         const agent = new Agent({
           providerId: "openai",
           modelId,
-          apiKey: process.env.OPENROUTER_API_KEY!,
+          apiKey: getAiApiKey(),
           baseUrl,
           maxIterations: 8,
           systemPrompt: `You are an expert React developer improving a live browser preview app.
@@ -343,7 +307,7 @@ RULES:
       enqueue(
         sseEvent("error", {
           message:
-            "AI provider is rate-limiting requests. Please retry, or set AI_MODEL / AI_MODEL_FALLBACKS to a different OpenRouter model.",
+            "AI provider is rate-limiting requests. Please retry.",
         })
       );
       controller.close();

@@ -129,7 +129,7 @@ export function WorkspaceClient({
       const timeoutId = window.setTimeout(() => {
         timedOut = true;
         abortController.abort();
-      }, 180_000);
+      }, 290_000);
 
       try {
         const conversationHistory = [...currentMessages, userMessage];

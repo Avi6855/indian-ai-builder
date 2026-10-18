@@ -21,7 +21,7 @@
 
 **INDIAN AI BUILDER** is a production-ready, AI-powered code generation platform designed to instantly turn plain English prompts into functional React and Tailwind CSS applications. It provides an intuitive workspace for rapid prototyping, iteration, and deployment.
 
-By leveraging advanced LLM capabilities via OpenRouter, the platform allows users to build, preview, and download custom web applications seamlessly—100% free for lifetime access.
+By leveraging advanced LLM capabilities via Nara Router, the platform allows users to build, preview, and download custom web applications seamlessly—100% free for lifetime access.
 
 ---
 
@@ -96,8 +96,8 @@ This platform acts as your personal AI software engineer:
 │                   Next.js API Routes (Backend)               │
 │                                                              │
 │  ┌──────────┐  ┌───────────┐  ┌──────────┐  ┌───────────┐  │
-│  │  Clerk   │  │ Supabase  │  │OpenRouter│  │  Arcjet   │  │
-│  │  Auth    │  │ Storage   │  │AI Gateway│  │Rate Limits│  │
+│  │  Clerk   │  │ Supabase  │  │  Nara    │  │  Arcjet   │  │
+│  │  Auth    │  │ Storage   │  │  Router  │  │Rate Limits│  │
 │  └──────────┘  └───────────┘  └──────────┘  └───────────┘  │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -122,9 +122,10 @@ This platform acts as your personal AI software engineer:
 ### AI Integration
 | Technology | Purpose |
 |---|---|
-| OpenRouter API | LLM gateway routing |
-| Gemma-4-31B-IT | Core LLM model for code generation |
-| AI SDK (Vercel) | Streaming text and object generation |
+| Nara Router API | LLM gateway routing |
+| Laguna S 2.1 | Core LLM model for code generation |
+| Nemotron 3.5 Lightning | Fast fallback LLM model |
+| Agnes 2.5 Flash | Vision-capable fallback LLM model |
 
 ---
 
@@ -168,11 +169,10 @@ NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_key
 
-# OpenRouter
-OPENAI_BASE_URL=https://openrouter.ai/api/v1
-OPENROUTER_API_KEY=your_openrouter_api_key
-AI_MODEL=z-ai/glm-4.5-air:free
-AI_MODEL_FALLBACKS=z-ai/glm-4.5-air:free
+# Nara Router
+NARA_BASE_URL=https://router.bynara.id/v1
+NARA_API_KEY=your_nara_router_api_key
+NARA_MODELS=laguna-s-2.1,nemotron-3.5-lightning-free,agnes-2.5-flash
 ```
 
 > ⚠️ **Never commit `.env.local` or any file containing real API keys.**
